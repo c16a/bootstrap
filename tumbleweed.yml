@@ -2,51 +2,39 @@
 - name: add external repositories
   hosts: localhost
   remote_user: root
+  vars:
+    external_keys:
+      - description: 'Google Linux'
+        key: 'https://dl.google.com/linux/linux_signing_key.pub'
+      - description: 'Microsoft'
+        key: 'https://packages.microsoft.com/keys/microsoft.asc'
+      - description: 'NVIDIA'
+        key: 'https://download.nvidia.com/opensuse/tumbleweed/repodata/repomd.xml.key'
+      - description: 'VLC'
+        key: 'http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/repodata/repomd.xml.key'
+    external_repos:
+      - name: 'google-chrome'
+        url: 'http://dl.google.com/linux/chrome/rpm/stable/x86_64/'
+      - name: 'code'
+        url: 'https://packages.microsoft.com/yumrepos/vscode'
+      - name: 'nvidia'
+        url: 'https://download.nvidia.com/opensuse/tumbleweed'
+      - name: 'vlc'
+        url: 'http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/'
 
   tasks:
-  - name: Add Google Linux keys
+  - name: Add external keys
     rpm_key:
-      key: https://dl.google.com/linux/linux_signing_key.pub
+      key: "{{ item.key }}"
       state: present
+    loop: "{{ external_keys }}"
 
-  - name: Enable Google Chrome 64-bit RPM repo
+  - name: Enable external repos
     zypper_repository:
-      name: google-chrome
-      repo: http://dl.google.com/linux/chrome/rpm/stable/x86_64/
+      name: "{{ item.name }}"
+      repo: "{{ item.url }}"
       auto_import_keys: yes
-
-  - name: Add Microsoft keys
-    rpm_key:
-      key: https://packages.microsoft.com/keys/microsoft.asc
-      state: present
-  
-  - name: Enable VS Code YUM repos
-    zypper_repository:
-      name: code
-      repo: https://packages.microsoft.com/yumrepos/vscode
-      auto_import_keys: yes
-
-  - name: Add NVIDIA keys
-    rpm_key:
-      key: https://download.nvidia.com/opensuse/tumbleweed/repodata/repomd.xml.key
-      state: present
-
-  - name: Enable NVIDIA CUDA repo
-    zypper_repository:
-      name: nvidia
-      repo: https://download.nvidia.com/opensuse/tumbleweed
-      auto_import_keys: yes
-
-  - name: Add Videolan keys
-    rpm_key:
-      key: http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/repodata/repomd.xml.key
-      state: present
-
-  - name: Enable VLC openSUSE Tumbleweed repo
-    zypper_repository:
-      name: vlc
-      repo: http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/
-      auto_import_keys: yes
+    loop: "{{ external_repos }}"
 
 - name: install system updates
   hosts: localhost
@@ -66,13 +54,8 @@
 - name: install packages
   hosts: localhost
   remote_user: root
-
-  tasks:
-  - name: install packages
-    zypper:
-      name: "{{ item }}"
-      state: present
-    loop:
+  vars:
+    packages:
       - go
       - docker
       - python3-docker-compose
@@ -86,8 +69,17 @@
       - vlc
       - vlc-codecs
 
+  tasks:
+  - name: install packages
+    zypper:
+      name: "{{ item }}"
+      state: present
+    loop: "{{ packages }}"
+
   - name: vendor change to vlc
     shell: zypper dup --from vlc --allow-vendor-change
+    args:  
+      warn: false
 
   - name: docker create group
     group:
@@ -102,25 +94,21 @@
   - name: refresh changes to groups
     shell: newgrp docker
 
-  - name: Systemctl Docker
-    systemd:
-      state: started
-      enabled: yes
-      name: docker
-
-  - name: pull ubuntu image
-    docker_image:
-      name: ubuntu
+  # - name: Systemctl Docker
+  #   systemd:
+  #     state: started
+  #     enabled: yes
+  #     name: docker
 
   - name: Download K3s script
     get_url:
       url: https://get.k3s.io
       dest: /tmp/k3s.sh
 
-  - name: install k3s
-    shell: sh /tmp/k3s.sh
-    environment:
-      INSTALL_K3S_CHANNEL: latest
+  # - name: install k3s
+  #   shell: sh /tmp/k3s.sh
+  #   environment:
+  #     INSTALL_K3S_CHANNEL: latest
 
   - name: get kubectl version
     uri:
@@ -128,16 +116,49 @@
       return_content: yes
     register: kubectl_version
 
-  - name: delete existing kubectl file, if any
+  - name: check if kubectl {{ kubectl_version.content }} version is available
+    shell: kubectl version --client
+    register: existing_kubectl_version
+
+  - name: delete older kubectl file, if any
     file:
       path: /usr/local/bin/kubectl
       state: absent
+    when: existing_kubectl_version.stdout.find(kubectl_version.content) == -1
 
   - name: install kubectl
     get_url:
-      url: https://storage.googleapis.com/kubernetes-release/release/{{ kubectl_version.content }}/bin/linux/amd64/kubectl
+      url: https://storage.googleapis.com/kubernetes-release/release/{{ kubectl_version.content | trim }}/bin/linux/amd64/kubectl
       dest: /usr/local/bin/kubectl
       mode: u=rwx,g=rwx,o=rwx
-  
+    when: existing_kubectl_version.stdout.find(kubectl_version.content) == -1
+
   - name: enable kubectl bash completion
     shell: /usr/local/bin/kubectl completion bash >/etc/bash_completion.d/kubectl
+
+  - name: get skaffold version
+    uri:
+      url: https://storage.googleapis.com/skaffold/releases/latest/VERSION
+      return_content: yes
+    register: skaffold_version
+
+  - name: trim skaffold version output
+    shell: echo {{ skaffold_version.content | trim }}
+    register: skaffold_version_trimmed
+
+  - name: check if skaffold {{ skaffold_version_trimmed.stdout }} version is available
+    shell: skaffold version
+    register: existing_skaffold_version
+
+  - name: delete existing skaffold file, if any
+    file:
+      path: /usr/local/bin/skaffold
+      state: absent
+    when: existing_skaffold_version.stdout.find(skaffold_version_trimmed.stdout) == -1
+    
+  - name: install skaffold
+    get_url:
+      url: https://storage.googleapis.com/skaffold/releases/{{ skaffold_version }}/skaffold-linux-amd64
+      dest: /usr/local/bin/skaffold
+      mode: u=rwx,g=rwx,o=rwx
+    when: existing_skaffold_version.stdout.find(skaffold_version_trimmed.stdout) == -1
