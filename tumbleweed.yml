@@ -17,7 +17,7 @@
 
   - name: Add Microsoft keys
     rpm_key:
-      key: https://packages.microsoft.com/keys/microsoft.asc # required. Key that will be modified. Can be a url, a file, or a keyid if the key already exists in the database.
+      key: https://packages.microsoft.com/keys/microsoft.asc
       state: present
   
   - name: Enable VS Code YUM repos
