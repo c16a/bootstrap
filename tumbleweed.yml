@@ -1,0 +1,143 @@
+---
+- name: add external repositories
+  hosts: localhost
+  remote_user: root
+
+  tasks:
+  - name: Add Google Linux keys
+    rpm_key:
+      key: https://dl.google.com/linux/linux_signing_key.pub
+      state: present
+
+  - name: Enable Google Chrome 64-bit RPM repo
+    zypper_repository:
+      name: google-chrome
+      repo: http://dl.google.com/linux/chrome/rpm/stable/x86_64/
+      auto_import_keys: yes
+
+  - name: Add Microsoft keys
+    rpm_key:
+      key: https://packages.microsoft.com/keys/microsoft.asc # required. Key that will be modified. Can be a url, a file, or a keyid if the key already exists in the database.
+      state: present
+  
+  - name: Enable VS Code YUM repos
+    zypper_repository:
+      name: code
+      repo: https://packages.microsoft.com/yumrepos/vscode
+      auto_import_keys: yes
+
+  - name: Add NVIDIA keys
+    rpm_key:
+      key: https://download.nvidia.com/opensuse/tumbleweed/repodata/repomd.xml.key
+      state: present
+
+  - name: Enable NVIDIA CUDA repo
+    zypper_repository:
+      name: nvidia
+      repo: https://download.nvidia.com/opensuse/tumbleweed
+      auto_import_keys: yes
+
+  - name: Add Videolan keys
+    rpm_key:
+      key: http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/repodata/repomd.xml.key
+      state: present
+
+  - name: Enable VLC openSUSE Tumbleweed repo
+    zypper_repository:
+      name: vlc
+      repo: http://download.videolan.org/pub/vlc/SuSE/Tumbleweed/
+      auto_import_keys: yes
+
+- name: install system updates
+  hosts: localhost
+  remote_user: root
+
+  tasks:
+  - name: refresh all repos
+    zypper_repository:
+      repo: '*'
+      runrefresh: yes
+
+  - name: update all packages
+    zypper:
+      name: '*'
+      state: latest
+
+- name: install packages
+  hosts: localhost
+  remote_user: root
+
+  tasks:
+  - name: install packages
+    zypper:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - go
+      - docker
+      - python3-docker-compose
+      - bazel
+      - git-review
+      - curl
+      - wget
+      - transmission
+      - code
+      - google-chrome-stable
+      - vlc
+      - vlc-codecs
+
+  - name: vendor change to vlc
+    shell: zypper dup --from vlc --allow-vendor-change
+
+  - name: docker create group
+    group:
+      name: docker
+      state: present
+
+  - name: add user to docker group
+    user:
+      name: c16a
+      group: docker
+
+  - name: refresh changes to groups
+    shell: newgrp docker
+
+  - name: Systemctl Docker
+    systemd:
+      state: started
+      enabled: yes
+      name: docker
+
+  - name: pull ubuntu image
+    docker_image:
+      name: ubuntu
+
+  - name: Download K3s script
+    get_url:
+      url: https://get.k3s.io
+      dest: /tmp/k3s.sh
+
+  - name: install k3s
+    shell: sh /tmp/k3s.sh
+    environment:
+      INSTALL_K3S_CHANNEL: latest
+
+  - name: get kubectl version
+    uri:
+      url: https://storage.googleapis.com/kubernetes-release/release/stable.txt
+      return_content: yes
+    register: kubectl_version
+
+  - name: delete existing kubectl file, if any
+    file:
+      path: /usr/local/bin/kubectl
+      state: absent
+
+  - name: install kubectl
+    get_url:
+      url: https://storage.googleapis.com/kubernetes-release/release/{{ kubectl_version.content }}/bin/linux/amd64/kubectl
+      dest: /usr/local/bin/kubectl
+      mode: u=rwx,g=rwx,o=rwx
+  
+  - name: enable kubectl bash completion
+    shell: /usr/local/bin/kubectl completion bash >/etc/bash_completion.d/kubectl
